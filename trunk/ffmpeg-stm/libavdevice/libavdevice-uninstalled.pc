@@ -1,0 +1,12 @@
+prefix=
+exec_prefix=
+libdir=${pcfiledir}
+includedir=/home/kate/Source/ffmpeg
+
+Name: libavdevice
+Description: FFmpeg device handling library
+Version: 52.2.0
+Requires: libavformat = 52.51.0
+Conflicts:
+Libs: ${libdir}/libavdevice.a  /usr/lib/libfribidi.a /usr/lib/libass.a /usr/lib/libfontconfig.a /usr/lib/libfreetype.a /usr/lib/libexpat.a /usr/lib/libfaac.a /usr/lib/libfaad.a -static -L/usr/lib /home/kate/Source/libenca.a  -lz -pthread -lm -lfaac -lfaad -lmp3lame -lm -lopencore-amrnb -lm -lopencore-amrwb -lm -ltheoraenc -ltheoradec -logg -lx264 -lm -ldl
+Cflags: -I${includedir}
