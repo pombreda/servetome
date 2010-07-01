@@ -1,0 +1,14 @@
+#summary StreamToMe Linux Server Wiki
+#labels Phase-Requirements,Phase-Deploy,Phase-Implementation
+
+<wiki:toc max_depth="1" />
+
+= Introduction =
+
+Python port of the StreamToMe Server. [http://projectswithlove.com/streamtome StreamToMe] is an application that transcodes your video/music library live to your iPad, iPhone and iPod.
+
+
+= Build Environemnt =
+
+Ubuntu 10.04 Server using Python 2.6.5
+
