@@ -11,13 +11,14 @@
 #
 # Date      Who  Version Notes
 # ------------------------------------
-# 02/06/10  KW   r100    Initial release
-# 18/06/10  KW   r300    Modified for ServeToMe 3.x operation
-# 01/07/10  KW   r301    Started coding http digest authentication, bugfix to subtitle params on ffmpeg-stm launch
-# 01/07/10  KW   r302    Reworked directory sorting code, added sort descending & date
+# 02/06/10  KW   v100    Initial release
+# 18/06/10  KW   v300    Modified for ServeToMe 3.x operation
+# 01/07/10  KW   v301    Started coding http digest authentication, bugfix to subtitle params on ffmpeg-stm launch
+# 01/07/10  KW   v302    Reworked directory sorting code, added sort descending & date
+# 01/07/10  CT   v303    JSON UTF-8 Fix
 #
 
-STM_VERSION = "3.02"
+STM_VERSION = "3.03"
 
 import string,cgi,time
 import ConfigParser
@@ -627,8 +628,8 @@ def doDirectory(client,self,url,options):
         debugLog("doDirectory(): Sort: {0}".format(sort))
         debugLog("doDirectory(): Heira: {0}".format(heirarchy))
 
-        for item in itemlist:
-            debugLog("doDirectory(): In: {0}".format(item))
+        #for item in itemlist:
+        #    debugLog("doDirectory(): In: {0}".format(item))
 
         if rootlevel==False:
             debugLog("doDirectory(): Sorting")
@@ -647,14 +648,23 @@ def doDirectory(client,self,url,options):
             if order==Order.descending:
                 itemlist.reverse()
 
-        for item in itemlist:
-            debugLog("doDirectory(): Out: {0}".format(item))
+        #for item in itemlist:
+        #    debugLog("doDirectory(): Out: {0}".format(item))
         
         # Now dump the sorted table
         response=response+"["
         loop=0
         while loop<len(itemlist):
             ident,name,type,mtime=itemlist[loop]
+
+            #Try to decode what we think is garbage to UTF-8, if the decode fails, then we know it is a bad filename and will prefix it with ############
+            try:
+                ucode=unicode( name, "utf-8" )
+                name=ucode.encode('utf-8', 'xmlcharrefreplace')
+            except:
+                stripped = (c for c in name if 0 < ord(c) < 127)
+                name='#################' + ''.join(stripped)
+
             if ident:
                 jsonitem=json.dumps({"identifier":str(loop), "name": name, "type": "folder"})
             else:
