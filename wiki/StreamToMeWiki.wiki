@@ -63,7 +63,12 @@ sudo apt-get install libopencore-amrwb-dev
 sudo ./configure --disable-shared --enable-static --enable-gpl --enable-version3 --enable-nonfree --enable-postproc --enable-pthreads --enable-libfaac --enable-libfaad --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libtheora --enable-libx264 --enable-encoder=mjpeg --enable-avfilter-lavf --enable-bzlib --enable-avfilter --extra-libs=/usr/lib/libfribidi.a --extra-libs=/usr/lib/libass.a --extra-libs=/usr/lib/libfontconfig.a --extra-libs=/usr/lib/libfreetype.a --extra-libs=/usr/lib/libexpat.a --extra-libs=/usr/lib/libfaac.a --extra-libs=/usr/lib/libfaad.a --enable-runtime-cpudetect --arch=x86 --cpu=pentium-m --disable-debug --enable-muxer=mpegts --enable-muxer=image2 --enable-muxer=image2pipe --extra-cflags=--static --extra-libs='-static -L/usr/lib' --extra-libs=./usr/lib/libenca.a
 
 ./make
+}}}
 
+
+Before we run the install for FFMpeg, please note that it will make a copy of "ffmpeg" into /usr/bin. If the file already exist, then it will not overwrite. But just wanted to be sure you understand that if you have not installed FFMpeg before, all future calls to ffmpeg will call to this compiled version in /usr/bin that is specifically for StreamToMe (if it was overwritten).
+
+{{{
 sudo checkinstall --pkgname=ffmpeg-stm --pkgversion "4:0.5+svn`date +%Y%m%d`" --backup=no --default
 }}}
 
