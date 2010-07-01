@@ -8,11 +8,15 @@
 #
 # Version History
 # ---------------
-# 02/06/10 r100 - Initial release
-# 18/06/10 r300 - Modified for ServeToMe 3.x operation & http digest auth
+#
+# Date      Who  Version Notes
+# ------------------------------------
+# 02/06/10  KW   r100    Initial release
+# 18/06/10  KW   r300    Modified for ServeToMe 3.x operation
+# 01/07/10  KW   r301    Started coding http digest authentication, bugfix to subtitle params on ffmpeg-stm launch
 #
 
-STM_VERSION = "3.00"
+STM_VERSION = "3.01"
 
 import string,cgi,time
 import ConfigParser
@@ -132,6 +136,7 @@ def sessionNew(client=""):
     sessions[client]['hash']=client
     sessions[client]['directory']=tempDir+"/session."+sessions[client]['hash'][0:12]
     sessions[client]['idle']=0
+    sessions[client]['authenticated']=False
     # Default params
     transcoderNew(client)
     if sys.platform=='win32': sessions[client]['directory']=sessions[client]['directory'].replace('/','\\')
@@ -215,7 +220,7 @@ def transcoderLaunch(client):
         # Temp file to replace stdout!
         segFile=transcoder['dest']+"seglist.out"
         # Now start the stream compilation in the background
-        execStr=[execDir+'/ffmpeg-stm','transcode',transcoder['source'],transcoder['dest']+transcoder['rate'],transcoder['rate'],str(transcoder['seglen']),str(transcoder['segstart']),transcoder['audio'],transcoder['subs'],transcoder['gain'],transcoder['art'],transcoder['srtdir'],transcoder['srtenc']]
+        execStr=[execDir+'/ffmpeg-stm','transcode',transcoder['source'],transcoder['dest']+transcoder['rate'],transcoder['rate'],str(transcoder['seglen']),str(transcoder['segstart']),transcoder['audio'],transcoder['subs'],transcoder['gain'],transcoder['art'],transcoder['srtenc'],transcoder['srtdir']]
         if sys.platform=='win32':
             execStr[0]=execDir+'/ffmpeg-stm.exe'
             execStr=subprocess.list2cmdline(execStr)
@@ -716,6 +721,7 @@ class requestHandler(BaseHTTPRequestHandler):
             del url[0]
 
         # Attempt to extract cookie from the headers and determine the client session
+        client=""
         if "Cookie" in self.headers:
             chocchip=Cookie.SimpleCookie(self.headers["Cookie"])
             client=chocchip[COOKIENAME].value
@@ -733,15 +739,41 @@ class requestHandler(BaseHTTPRequestHandler):
                 client=sessionNew()
                 debugLog("requestHandler(): New session {0}".format(client))                
         
-
-        if command=="stream":
-            doStream(client,self,url,options)
-        elif command=="folders" or command=="contents":
-            doDirectory(client,self,url,options)
-        elif command=="metadata":
-            doMetadata(client,self,url,options)
+        override=True
+        # Check client authentication state
+        if override or client=="" or sessions[client]['authenticated']:
+            if command=="stream":
+                doStream(client,self,url,options)
+            elif command=="folders" or command=="contents":
+                doDirectory(client,self,url,options)
+            elif command=="metadata":
+                doMetadata(client,self,url,options)
+            else:
+                doRoot(self,url,options)
         else:
-            doRoot(self,url,options)
+            # Digest username=\"user\",
+            # realm=\"serveToMe\",
+            # nonce=\"6c2ae85c-1d69-4942-b40f-c8b65a1587e9\",#
+            # uri=\"/contents/2/dir1?sort=name&order=ascending&hierarchy=folder\",
+            # response=\"5472bed9ee9d18ba85a2d65afc6a51a0\",
+            # cnonce=\"30f526da4a368395443890ae9bf4b042\",
+            # nc=00000001,
+            # qop=\"auth\"
+            nonce=genHash()
+            authresp="Digest realm=\"serveToMe\",qop=\"auth\",nonce=\""+nonce+"\""
+            response="Please login"
+            chocchip=Cookie.SimpleCookie()
+            chocchip[COOKIENAME]=sessions[client]['hash']
+            self.send_response(401)
+            self.send_header('Set-Cookie',chocchip.output(header=''))
+            self.send_header('Servetome-Version',STM_VERSION)
+            self.send_header('Connection','close')
+            self.send_header('WWW-Authenticate',authresp)
+            self.send_header('Content-Length',len(response))
+            self.send_header('Content-Type','text/html')
+            self.end_headers()
+            self.wfile.write(response)
+        
         return
 
 def sigHandler(signum, frame):
