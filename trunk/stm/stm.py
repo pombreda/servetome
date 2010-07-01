@@ -14,9 +14,10 @@
 # 02/06/10  KW   r100    Initial release
 # 18/06/10  KW   r300    Modified for ServeToMe 3.x operation
 # 01/07/10  KW   r301    Started coding http digest authentication, bugfix to subtitle params on ffmpeg-stm launch
+# 01/07/10  KW   r302    Reworked directory sorting code, added sort descending & date
 #
 
-STM_VERSION = "3.01"
+STM_VERSION = "3.02"
 
 import string,cgi,time
 import ConfigParser
@@ -35,7 +36,7 @@ import signal
 from threading import Event, Thread
 from urlparse import urlparse
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-
+from operator import itemgetter
 
 listenPort=9969
 username=""
@@ -538,6 +539,56 @@ def doDirectory(client,self,url,options):
     # Reset session idle timer
     sessions[client]['idle']=0
 
+    # Now sort the response table and output
+    class Order:
+        none=0
+        ascending=1
+        descending=2
+        
+    class Sort:
+        ident=0            
+        name=1
+        type=2
+        date=3
+        none=4
+        
+    class Heirarchy:
+        folder=0
+        flat_folder=1
+        flat=2
+        
+    order=Order.none
+    sort=Sort.none
+    heirarchy=Heirarchy.folder
+    
+    for opt in options:
+        optname=""
+        optval=""
+        if(opt): optname,optval=opt.split('=')
+        if optname=='order':
+            if optval=='ascending':
+                order=Order.ascending;
+            elif optval=='descending':
+                order=Order.descending;
+            else:
+                order=Order.ascending;
+        if optname=='sort':
+            if optval=='name':
+                sort=Sort.name;
+            elif optval=='type':
+                sort=Sort.type;
+            elif optval=='date':
+                sort=Sort.date;
+            else:
+                sort=Sort.none;
+        if optname=='heirarchy':
+            if optval=='folder':
+                heirarchy=Heirarchy.folder;
+            elif optval=='flat':
+                heirarchy=Heirarchy.flat;
+            else:
+                heirarchy=Heirarchy.folder;
+
     try:
         response=""
         itemlist=[]
@@ -551,7 +602,7 @@ def doDirectory(client,self,url,options):
             loop=0
             while loop<len(directoryList):
                 dirnam=directoryList[loop].split('/')[len(directoryList[loop].split('/'))-1]
-                itemlist.append(str(loop)+','+dirnam+',folder')
+                itemlist.append((str(loop),dirnam,'folder',0))
                 loop=loop+1
         else:
             debugLog("doDirectory(): Path: {0}".format(url))
@@ -561,107 +612,49 @@ def doDirectory(client,self,url,options):
             dirList=os.listdir(fpath)
             debugLog("doDirectory(): Found: {0}".format(dirList))
             for item in dirList:
+                mtime=os.stat(fpath+"/"+item).st_mtime
                 if os.path.isdir(fpath+"/"+item) == True:
-                    itemlist.append(','+item+',folder')
+                    if item[0]!=".":
+                        itemlist.append(('',item,'folder',mtime))
                 else:
                     lowitem=string.lower(item)
                     #debugLog("doDirectory(): lowitem: {0}".format(lowitem))
                     if lowitem.endswith(extensionList)==True:
-                        itemlist.append(','+item+',file')
-                
-        # Now sort the response table and output
-        class Order:
-            none=0
-            ascending=1
-            descending=2
-            
-        class Sort:
-            ident=0            
-            name=1
-            type=2
-            none=3
-            
-        class Heirarchy:
-            folder=0
-            flat_folder=1
-            flat=2
-            
-        order=Order.none
-        sort=Sort.none
-        heirarchy=Heirarchy.folder
+                        itemlist.append(('',item,'file',mtime))
         
-        for opt in options:
-            optname=""
-            optval=""
-            if(opt): optname,optval=opt.split('=')
-            if optname=='order':
-                if optval=='ascending':
-                    order=Order.ascending;
-                elif optval=='descending':
-                    order=Order.descending;
-                else:
-                    order=Order.ascending;
-            if optname=='sort':
-                if optval=='name':
-                    sort=Sort.name;
-                elif optval=='type':
-                    sort=Sort.type;
-                else:
-                    sort=Sort.none;
-            if optname=='heirarchy':
-                if optval=='folder':
-                    heirarchy=Heirarchy.folder;
-                elif optval=='flat':
-                    heirarchy=Heirarchy.flat;
-                else:
-                    heirarchy=Heirarchy.folder;
                 
         debugLog("doDirectory(): Order: {0}".format(order))
         debugLog("doDirectory(): Sort: {0}".format(sort))
         debugLog("doDirectory(): Heira: {0}".format(heirarchy))
 
+        for item in itemlist:
+            debugLog("doDirectory(): In: {0}".format(item))
+
         if rootlevel==False:
-            def compareA(a, b):
-                vala=a.split(',')
-                valb=b.split(',')
-                if vala[0] or valb[0]: return 0;
-                if order==Order.ascending:
-                    #debugLog("CompareAA() : {0}".format(vala,valb))
-                    return cmp(vala[sort],valb[sort])
-                elif order==Order.descending:
-                    #debugLog("CompareAD() : {0}".format(vala,valb))
-                    return cmp(valb[sort],vala[sort])
-                else:
-                    return 0
+            debugLog("doDirectory(): Sorting")
+            # itemlist tuple: ident, filename, type, mtime
 
-            def compareB(a, b):
-                vala=a.split(',')
-                valb=b.split(',')
-                if vala[0] or valb[0]: return 0;           
-                if heirarchy==Heirarchy.folder:
-                    return cmp(valb[2],vala[2])
-                else:
-                    return 0
-
-            #for item in itemlist:
-            #    debugLog("doDirectory(): In : {0}".format(item))
+            if sort==Sort.name:
+                itemlist=sorted(itemlist, key=itemgetter(1))
+                itemlist=sorted(itemlist, key=itemgetter(2), reverse=True)
+            elif sort==Sort.date:
+                itemlist=sorted(itemlist, key=itemgetter(3), reverse=True)
+                #itemlist=sorted(itemlist, key=itemgetter(2), reverse=True)
                 
-            itemlist.sort(compareA)
+            #if heirarchy==Heirarchy.folder:
+            #    sorted(itemlist, key=lambda items: items[2])
 
-            #for item in itemlist:
-            #    debugLog("doDirectory(): Mid: {0}".format(item))
+            if order==Order.descending:
+                itemlist.reverse()
 
-            if heirarchy==Heirarchy.folder:
-                itemlist.sort(compareB)
-
-        #for item in itemlist:
-        #    debugLog("doDirectory(): Out: {0}".format(item))
+        for item in itemlist:
+            debugLog("doDirectory(): Out: {0}".format(item))
         
         # Now dump the sorted table
         response=response+"["
         loop=0
         while loop<len(itemlist):
-            ident,name,type=itemlist[loop].split(',')
+            ident,name,type,mtime=itemlist[loop]
             if ident:
                 jsonitem=json.dumps({"identifier":str(loop), "name": name, "type": "folder"})
             else:
