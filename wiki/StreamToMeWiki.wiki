@@ -11,7 +11,7 @@ Python port of the StreamToMe Server. [http://projectswithlove.com/streamtome St
 Ubuntu 10.04 Server using Python 2.6.5
 
 = Build FFMpeg from source (Debian Lenny) =
-This is just an step by step guide as I was trying to build svn checkout of FFMpeg-stm. I may have missed some steps since I have build FFMpeg in the past and might have installed some prerequisites already. Please note that Debian Lenny comes with Python 2.4. We need to install Python2.6 experimental to run the stm.py server.
+This is just an step by step guide as I was trying to build svn checkout of FFMpeg-stm. I may have missed some steps since I have build FFMpeg in the past and might have installed some prerequisites already. Please note that Debian Lenny comes with Python 2.4. We need to install Python2.6 experimental to run the stm.py server (Not covered here).
 
 
 
