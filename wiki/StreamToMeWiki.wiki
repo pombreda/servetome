@@ -8,5 +8,19 @@ Python port of the StreamToMe Server. [http://projectswithlove.com/streamtome St
 
 
 = Build Environemnt =
-
 Ubuntu 10.04 Server using Python 2.6.5
+
+= Build FFMpeg from source (Debian Lenny) =
+This is just an step by step guide as I was trying to build svn checkout of FFMpeg-stm. I may have missed some steps since I have build FFMpeg in the past and might have installed some prerequisites already.
+
+
+First we are going to build x264...
+{{{
+apt-get install checkinstall yasm git-core
+git clone git://git.videolan.org/x264.git
+cd x264
+./configure
+make
+sudo checkinstall --pkgname=x264 --pkgversion "1:0.svn`date +%Y%m%d`" --backup=no --default
+cd ..
+}}}
