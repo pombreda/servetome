@@ -79,4 +79,4 @@ cp ffmpeg ../stm/bin/ffmeg-stm
 
 Under Lenny, the command to start the server is "python2.6 stm.py"
 
-If you find any error or some step I have missed please feel free to email me. Enjoy.
+If you find any error or some step I have missed, please feel free to email me. Enjoy.
