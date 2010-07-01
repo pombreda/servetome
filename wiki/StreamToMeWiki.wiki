@@ -74,7 +74,7 @@ sudo checkinstall --pkgname=ffmpeg-stm --pkgversion "4:0.5+svn`date +%Y%m%d`" --
 
 Now we are going to copy the binary to the /stm/bin directory...
 {{{
-cp ffmpeg ../stm/bin/ffmeg-stm
+cp ./ffmpeg ../stm/bin/ffmeg-stm
 }}}
 
 Under Lenny, the command to start the server is "python2.6 stm.py"
