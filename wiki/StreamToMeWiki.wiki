@@ -66,7 +66,7 @@ sudo ./configure --disable-shared --enable-static --enable-gpl --enable-version3
 }}}
 
 
-Before we run the install for FFMpeg, please note that it will make a copy of "ffmpeg" into /usr/bin. If the file already exist, then it will not overwrite. But just wanted to be sure you understand that if you have not installed FFMpeg before, all future calls to ffmpeg will call to this compiled version in /usr/bin that is specifically for StreamToMe (if it was overwritten).
+Before we run the install for FFMpeg, please note that it will make a copy of "ffmpeg" into /usr/bin. If the file already exist, then it will not overwrite. But just wanted to be sure you understand that if you have not installed FFMpeg before, all future calls to ffmpeg will call this compiled version in /usr/bin that is specifically for StreamToMe (if it was overwritten).
 
 {{{
 sudo checkinstall --pkgname=ffmpeg-stm --pkgversion "4:0.5+svn`date +%Y%m%d`" --backup=no --default
