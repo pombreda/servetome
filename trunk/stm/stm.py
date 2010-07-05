@@ -49,7 +49,7 @@ extensionList=("aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif
 debugEnable=False
 sessions={}
 commandHandle=""
-SEG_LOOK_AHEAD=10
+SEG_LOOK_AHEAD=1
 DEFAULT_SEGLEN=4
 SESSION_TIMEOUT=1200
 SESSION_TIMEOUT_STEP=10
@@ -129,7 +129,6 @@ def buildPath(pathbits):
             fpath = fpath + pathbits[loop]
             loop=loop+1
     return fpath
-
 
     
 def sessionNew(client=""):
@@ -272,7 +271,12 @@ def transcoderKill(client):
         ffmpeg=sessions[client]['transcoder']['process']
         ffmpeg.poll()
         if ffmpeg.returncode==None:
-            ffmpeg.kill()
+            ffmpeg.stdin.write("\ndiediedie\n")
+            #ffmpeg.wait()
+            time.sleep(0.1)
+            ffmpeg.poll()
+            if ffmpeg.returncode==None:
+                ffmpeg.kill()
         del sessions[client]['transcoder']['process']
         sessions[client]['transcoder']['seglist'].close()
         debugLog("transcoderKill(): Killed")
@@ -393,7 +397,7 @@ def doStream(client,self,url,options):
         # Register the transcoder options & kick off the codec, lets hope we mapped the right rate!
         transcoderLaunch(client)
 
-    # Check if its a seq request and if so then keep seglast 10 ahead, ack if needed
+    # Check if its a seq request and if so then keep seglast SEG_LOOK_AHEAD ahead, ack if needed
     if request.endswith("ts")==True and sessions[client]['transcoder'].has_key('process'):
         # Extract segment number and rate value
         segno=int(request[-8:-3])
@@ -401,42 +405,42 @@ def doStream(client,self,url,options):
         
         # Check this is the rate we're doing, if not we need to re-kick the transcoder
         if rate!=sessions[client]['transcoder']['rate']:
-            debugLog("doSegments(): Forcing transcoder restart, new rate({0}) & segment({1})".format(rate,segno))
+            debugLog("doStream(): Forcing transcoder restart, new rate({0}) & segment({1})".format(rate,segno))
             sessions[client]['transcoder']['rate']=rate
             sessions[client]['transcoder']['segstart']=segno
             transcoderLaunch(client)
 
         if segno<sessions[client]['transcoder']['segstart'] or segno>sessions[client]['transcoder']['seglast']+1:
             # Looks like a jump, we should restart the codec
-            debugLog("doSegments(): Forcing transcoder restart, segment jump from {0} to {1}".format(sessions[client]['transcoder']['seglast'],segno))
+            debugLog("doStream(): Forcing transcoder restart, segment jump from {0} to {1}".format(sessions[client]['transcoder']['seglast'],segno))
             sessions[client]['transcoder']['segstart']=segno
             transcoderLaunch(client)
 
         # Check if this segment has been done
         if segno==sessions[client]['transcoder']['seglast']+1:
-            debugLog("doSegments(): Waiting for the next segment to complete")
+            debugLog("doStream(): Waiting for the next segment to complete")
             while 1:
                 sessions[client]['transcoder']['process'].poll()
                 if sessions[client]['transcoder']['process'].returncode!=None: break
                 status=sessions[client]['transcoder']['seglist'].readline()
                 # Extract segment number from output
                 if not status=="" and not status[0:3]=="Dur":
-                    debugLog("doSegments(): Segwait - Got '{0}'".format(status))
+                    debugLog("doStream(): Segwait - Got '{0}'".format(status))
                     junk,status=status.rsplit(" ",1)
                     if int(status)==segno:
-                        debugLog("doSegments(): Segwait - Got {0}".format(segno))
+                        debugLog("doStream(): Segwait - Got {0}".format(segno))
                         break
                     elif int(status)<segno:
-                        debugLog("doSegments(): Segwait - Got {0} want {1} - Waiting".format(int(status),segno))
+                        debugLog("doStream(): Segwait - Got {0} want {1} - Waiting".format(int(status),segno))
                     else:
                         # Should never be, means somehow we skipped this segment!!
-                        debugLog("doSegments(): Segwait - Got {0} want {1} - Reseting transcoder".format(int(status),segno))
+                        debugLog("doStream(): Segwait - Got {0} want {1} - Reseting transcoder".format(int(status),segno))
                         sessions[client]['transcoder']['segstart']=segno
                         transcoderLaunch(client)
                         break
                 else:
                     # Spin for a short time
-                    debugLog("doSegments(): SPINNING")
+                    debugLog("doStream(): SPINNING")
                     time.sleep(0.25)
                     
         sessions[client]['transcoder']['seglast']=segno
@@ -447,9 +451,9 @@ def doStream(client,self,url,options):
         if pstat==None:
             # Send the ack, there is a race here, it might finish between the poll & the ack!
             sessions[client]['transcoder']['process'].stdin.write("ack")
-            debugLog("doSegments(): Ack - One more seg please")
+            debugLog("doStream(): Ack - One more seg please")
         else:
-            debugLog("doSegments(): Ack - Process is complete or dead")
+            debugLog("doStream(): Ack - Process is complete or dead")
 
     # Path to output file
     fpath=movieDir+request
@@ -471,7 +475,7 @@ def doStream(client,self,url,options):
         self.end_headers()
         self.wfile.write(response)
     except:
-        debugLog("doSegments(): Exception raised, sending 404")
+        debugLog("doStream(): Exception raised, sending 404")
         self.send_error(404,'Segment Not Found: %s' % self.path)
 
 def doMetadata(client,self,url,options):
