@@ -16,9 +16,10 @@
 # 01/07/10  KW   v301    Started coding http digest authentication, bugfix to subtitle params on ffmpeg-stm launch
 # 01/07/10  KW   v302    Reworked directory sorting code, added sort descending & date
 # 01/07/10  CT   v303    JSON UTF-8 Fix
+# 06/07/10  KW   v304    Reworking of doStream to stop re-tcoding already done segs
 #
 
-STM_VERSION = "3.03"
+STM_VERSION = "3.04wip"
 
 import string,cgi,time
 import ConfigParser
@@ -49,7 +50,7 @@ extensionList=("aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif
 debugEnable=False
 sessions={}
 commandHandle=""
-SEG_LOOK_AHEAD=1
+SEG_LOOK_AHEAD=5
 DEFAULT_SEGLEN=4
 SESSION_TIMEOUT=1200
 SESSION_TIMEOUT_STEP=10
@@ -208,6 +209,23 @@ def transcoderNew(client,options=""):
         elif optname=='srtEncoding' and optval!="":
             sessions[client]['transcoder']['srtenc']=optval
 
+def transcoderKill(client):
+    if sessions[client].has_key('transcoder') and sessions[client]['transcoder'].has_key('process'):
+        ffmpeg=sessions[client]['transcoder']['process']
+        ffmpeg.poll()
+        if ffmpeg.returncode==None:
+            ffmpeg.stdin.write("\ndiediedie\n")
+            #ffmpeg.wait()
+            time.sleep(0.1)
+            ffmpeg.poll()
+            if ffmpeg.returncode==None:
+                ffmpeg.kill()
+        del sessions[client]['transcoder']['process']
+        sessions[client]['transcoder']['seglist'].close()
+        debugLog("transcoderKill(): Killed")
+    #else:
+    #    debugLog("transcoderKill(): Nothing to kill")
+
 def transcoderLaunch(client):
 
     if not sessions[client].has_key('transcoder'):
@@ -265,24 +283,48 @@ def transcoderLaunch(client):
         transcoder['seglast']=transcoder['segstart']-1
         transcoder['segcount']=transcoder['duration']/DEFAULT_SEGLEN
 
+def transcoderProcess(client):
+    if not sessions[client].has_key('transcoder'):
+        debugLog("transcoderProcess(): Missing client transcoder key???")
+        return False
+    elif not sessions[client]['transcoder'].haskey('process'):
+        debugLog("transcoderProcess(): No active transcoder")
+        return False
+    else:
+        transcoder=sessions[client]['transcoder']
 
-def transcoderKill(client):
-    if sessions[client].has_key('transcoder') and sessions[client]['transcoder'].has_key('process'):
-        ffmpeg=sessions[client]['transcoder']['process']
-        ffmpeg.poll()
-        if ffmpeg.returncode==None:
-            ffmpeg.stdin.write("\ndiediedie\n")
-            #ffmpeg.wait()
-            time.sleep(0.1)
-            ffmpeg.poll()
-            if ffmpeg.returncode==None:
-                ffmpeg.kill()
-        del sessions[client]['transcoder']['process']
-        sessions[client]['transcoder']['seglist'].close()
-        debugLog("transcoderKill(): Killed")
-    #else:
-    #    debugLog("transcoderKill(): Nothing to kill")
-    
+        # If we have an active transcoder then process any pending seg completes
+        # and mark in the mapping tables as being completed
+        transcoder['process'].poll()
+        if transcoder['process'].returncode==None:
+            debugLog("transcoderProcess(): Transcoder is running")
+            while 1:
+                status=transcoder['seglist'].readline()
+                # Extract segment number from output
+                if status!="":
+                    debugLog("transcoderProcess(): Got '{0}'".format(status))
+                    junk,status=status.rsplit(" ",1)
+                    # Mark as received in the array
+                    sessions[client][transcoder['source']][transcoder['rate']][int(status)]="1"
+                else:
+                    debugLog("transcoderProcess(): Transcoder has nothing for us")
+                    break
+        else:
+            debugLog("transcoderProcess(): Transcoder has finished")
+
+        # Ack another single segment for this one we've sent
+        transcoder['process'].poll()
+        pstat=sessions[client]['transcoder']['process'].returncode
+        if pstat==None:
+            # Send the ack, there is a race here, it might finish between the poll & the ack!
+            transcoder['process'].stdin.write("ack")
+            debugLog("transcoderProcess(): Ack - One more seg please")
+        else:
+            debugLog("transcoderProcess(): Ack - Process is complete or dead")
+
+
+
+        
 def doRoot(self,url,options):
     response="<html>"
     response+="<head><title>ServeToMe</title></head>"
@@ -352,7 +394,12 @@ def doStream(client,self,url,options):
         
         # Register the duration from the transcode with the ufid, we'll want it later if there is a quick restart
         sessions[client][fpath]['duration']=sessions[client]['transcoder']['duration']
-        
+
+        # Create the file maps
+        for rate in ratelookup:
+            if not sessions[client][fpath].has_key(ratelookup[rate]):
+                sessions[client][fpath][ratelookup[rate]]="0"*((int(sessions[client][fpath]['duration'])/DEFAULT_SEGLEN)+1)
+            
         # We must now build the index files for our UFID
         try:
             # Generate UUID/index.m3u8
@@ -385,7 +432,18 @@ def doStream(client,self,url,options):
         except:
             debugLog("doStream(): We had an exception during the file build")
             debugLog("doStream(): {0}".format(traceback.format_exc()))
-   
+
+    # Handle any completed segments
+    #transcoderProcess(client)
+    
+    # Check if this segment has not been completed
+    #if request.endswith("ts")==True AND sessions[client][fpath][int(request[-8:-3])]=="0":
+    #    if not next seg OR rate change OR tcoder!=thisfile
+    #        restartTranscoder at new rate/file/seg
+    #    while 1:
+    #        transcoderProcess(client)
+    #        if segno == done: break
+            
     # Check if we have a transcoder that its running for the right movie
     if not fpath==sessions[client]['transcoder']['source']:
         debugLog("doStream(): Movie switch requested, new movie: {0}".format(fpath))
