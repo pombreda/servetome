@@ -17,9 +17,15 @@
 # 01/07/10  KW   v302    Reworked directory sorting code, added sort descending & date
 # 01/07/10  CT   v303    JSON UTF-8 Fix
 # 06/07/10  KW   v304    Reworking of doStream to stop re-tcoding already done segs
+# 13/07/10  KW   v305    New streaming implementation complete, still some bugs
 #
+#
+# TODO
+# ----
+# HTTP digest implementation
+# Bugfix the restart without metadata condition - Need duration to build maps & m3u8 files
 
-STM_VERSION = "3.04wip"
+STM_VERSION = "3.05wip"
 
 import string,cgi,time
 import ConfigParser
@@ -57,7 +63,8 @@ SESSION_TIMEOUT_STEP=10
 COOKIENAME="STREAMSESSIONID"
 debugHandle=None
 commandHandle=None
-ratelookup={'wifi':'veryhigh','veryhigh':'veryhigh','high':'high','midhigh':'midhigh','mid':'mid','midlow':'midlow','low':'low','verylow':'verylow',}
+#ratelookup={'wifi':'veryhigh','veryhigh':'veryhigh','high':'high','midhigh':'midhigh','mid':'mid','midlow':'midlow','low':'low','verylow':'verylow',}
+ratelookup=['veryhigh','high','midhigh','mid','midlow','low','verylow']
 
 # RepeatTimer class - Copyright (c) 2009 Geoffrey Foster
 # http://g-off.net/software/a-python-repeatable-threadingtimer-class
@@ -140,7 +147,6 @@ def sessionNew(client=""):
     sessions[client]['idle']=0
     sessions[client]['authenticated']=False
     # Default params
-    transcoderNew(client)
     if sys.platform=='win32': sessions[client]['directory']=sessions[client]['directory'].replace('/','\\')
     # Does this dir already exist
     if not os.path.exists(sessions[client]['directory']): os.makedirs(sessions[client]['directory'])
@@ -170,11 +176,12 @@ def sessionIdle():
 
             
             
-def transcoderNew(client,options=""):
+def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=0):
     transcoderKill(client)
+    if segstart<0: segstart=0
     sessions[client]['transcoder']={}
-    sessions[client]['transcoder']['rate']='veryhigh'
-    sessions[client]['transcoder']['segstart']=0
+    sessions[client]['transcoder']['rate']=rate
+    sessions[client]['transcoder']['segstart']=segstart
     sessions[client]['transcoder']['seglen']=DEFAULT_SEGLEN
     sessions[client]['transcoder']['seglast']=0
     sessions[client]['transcoder']['segack']=0
@@ -184,9 +191,9 @@ def transcoderNew(client,options=""):
     sessions[client]['transcoder']['art']='yes'
     sessions[client]['transcoder']['srtdir']='default'
     sessions[client]['transcoder']['srtenc']='UTF-8'
-    sessions[client]['transcoder']['source']=''
-    sessions[client]['transcoder']['dest']=''
-    sessions[client]['transcoder']['duration']=0.0
+    sessions[client]['transcoder']['duration']=sessions[client][fpath]['duration']
+    sessions[client]['transcoder']['source']=fpath
+    sessions[client]['transcoder']['dest']=movieDir
 
     # Extract params from stream command and overide any defaults
     options=options.split(',')
@@ -194,9 +201,11 @@ def transcoderNew(client,options=""):
         optname=""
         optval=""
         if(opt): optname,optval=opt.split('=')
-        if optname=='rate' and ratelookup.has_key(optval):
-            sessions[client]['transcoder']['rate']=ratelookup[optval]
-        elif optname=='audio' and optval!="":
+        #if optname=='rate' and ratelookup.has_key(optval):
+        #if optname=='rate' and optval!="":
+            #sessions[client]['transcoder']['rate']=ratelookup[optval]
+            #sessions[client]['transcoder']['rate']=optval
+        if optname=='audio' and optval!="":
             sessions[client]['transcoder']['audio']=optval
         elif (optname=='subtitles' or optname=='subtitle') and optval!="":
             sessions[client]['transcoder']['subs']=optval
@@ -208,6 +217,20 @@ def transcoderNew(client,options=""):
             sessions[client]['transcoder']['srtdir']=optval
         elif optname=='srtEncoding' and optval!="":
             sessions[client]['transcoder']['srtenc']=optval
+
+    # Before we finish we need to check the start segment against ones we already have
+    # in stock, if we've already got it then dont make it again, push the startseg ahead
+    rate=sessions[client]['transcoder']['rate']
+    segstart=sessions[client]['transcoder']['segstart']
+    
+    if fpath!="" and sessions[client].has_key(fpath) and sessions[client][fpath].has_key(rate):
+        while sessions[client][fpath][rate][segstart]=="1":
+            segstart+=1
+        debugLog("transcoderNew() - bumped segstart to {0}".format(segstart))
+        # Save the new start segment
+        sessions[client]['transcoder']['segstart']=segstart
+    
+    
 
 def transcoderKill(client):
     if sessions[client].has_key('transcoder') and sessions[client]['transcoder'].has_key('process'):
@@ -245,6 +268,8 @@ def transcoderLaunch(client):
             execStr=subprocess.list2cmdline(execStr)
             execStr=execStr.replace('/','\\')
             segFile=segFile.replace('/','\\')
+        elif sys.platform=='darwin':
+            execStr[0]=execDir+'/ffmpeg-stm_osx'
 
         debugLog("transcoderLaunch(): Exec: {0}".format(execStr))
 
@@ -272,7 +297,9 @@ def transcoderLaunch(client):
             if not status=="":
                 debugLog("transcoderLaunch(): Got '{0}'".format(status))
                 junk,duration=status.rsplit(" ",1)
+                # Register the duration from the transcode with the ufid, we'll want it later if there is a quick restart
                 transcoder['duration']=float(duration)
+                sessions[client][transcoder['source']]['duration']=float(duration)
                 break
             else:
                 # Spin for a short time
@@ -287,7 +314,7 @@ def transcoderProcess(client):
     if not sessions[client].has_key('transcoder'):
         debugLog("transcoderProcess(): Missing client transcoder key???")
         return False
-    elif not sessions[client]['transcoder'].haskey('process'):
+    elif not sessions[client]['transcoder'].has_key('process'):
         debugLog("transcoderProcess(): No active transcoder")
         return False
     else:
@@ -297,30 +324,52 @@ def transcoderProcess(client):
         # and mark in the mapping tables as being completed
         transcoder['process'].poll()
         if transcoder['process'].returncode==None:
-            debugLog("transcoderProcess(): Transcoder is running")
-            while 1:
-                status=transcoder['seglist'].readline()
-                # Extract segment number from output
-                if status!="":
-                    debugLog("transcoderProcess(): Got '{0}'".format(status))
-                    junk,status=status.rsplit(" ",1)
-                    # Mark as received in the array
-                    sessions[client][transcoder['source']][transcoder['rate']][int(status)]="1"
-                else:
-                    debugLog("transcoderProcess(): Transcoder has nothing for us")
-                    break
+            #debugLog("transcoderProcess(): Transcoder is running")
+            pass
         else:
-            debugLog("transcoderProcess(): Transcoder has finished")
+            debugLog("transcoderProcess(): Transcoder has finished, cleaning up")
+            del transcoder['process']
+            
+        #debugLog("transcoderProcess(): Filemap IN ={0}".format(sessions[client][transcoder['source']][transcoder['rate']][:20]))
+        count=0
+        while 1:
+            status=transcoder['seglist'].readline()
+            # Extract segment number from output
+            if status!="":
+                debugLog("transcoderProcess(): Got '{0}'".format(status[:-1]))
+                junk,status=status.rsplit(" ",1)
+                # Mark as received in the file map array
+                idx=int(status)
+                fmap=sessions[client][transcoder['source']][transcoder['rate']]
+                fmap = fmap[0:idx] + "1" + fmap[idx+1:]
+                sessions[client][transcoder['source']][transcoder['rate']]=fmap
+                # We need to keep account of the last segment acked, allows us to wait
+                # for next seg in the doStream
+                transcoder['seglast']=idx
+                # Increase count for later ACK
+                count+=1
+            else:
+                #debugLog("transcoderProcess(): Transcoder has nothing for us")
+                break
+        if count>0: debugLog("transcoderProcess(): Filemap OUT={0}".format(sessions[client][transcoder['source']][transcoder['rate']][:20]))
 
-        # Ack another single segment for this one we've sent
-        transcoder['process'].poll()
-        pstat=sessions[client]['transcoder']['process'].returncode
-        if pstat==None:
-            # Send the ack, there is a race here, it might finish between the poll & the ack!
-            transcoder['process'].stdin.write("ack")
-            debugLog("transcoderProcess(): Ack - One more seg please")
-        else:
-            debugLog("transcoderProcess(): Ack - Process is complete or dead")
+        # Ack same number of segs as we've received, always keep the tcoder
+        # SEG_LOOK_AHEAD segments ahead of the game
+        if transcoder.has_key('process'):
+            transcoder['process'].poll()
+            pstat=transcoder['process'].returncode
+            if pstat==None:
+                if count>0:
+                    # Send the ack, there is a race here, it might finish between the poll & the ack!
+                    ackstr="ack"*count
+                    transcoder['process'].stdin.write(ackstr)
+                    debugLog("transcoderProcess(): Ack - More segs({0}) please".format(str(count)))
+                #else:
+                    #debugLog("transcoderProcess(): Nothing to ACK")
+            else:
+                debugLog("transcoderProcess(): Ack - Process is complete or dead")
+
+        return True
 
 
 
@@ -365,10 +414,10 @@ def doStream(client,self,url,options):
     # Check if a key exists for this file for this client, the key is
     # critical for us as it contains all of the specific movie info
     # that we need for transoding 
-    if sessions[client].has_key(fpath):
+    if sessions[client].has_key(fpath) and sessions[client][fpath].has_key("ufid") :
         movieDir=sessions[client]['directory']+"/"+sessions[client][fpath]['ufid']+"/"
     else:
-        sessions[client][fpath]={}
+        if not sessions[client].has_key(fpath): sessions[client][fpath]={}
         debugLog("doStream(): Creating session data for this movie: {0}".format(fpath))
 
         # Hash the film name to UFID to save a long path being appended fpath=UFID for the transcoder output
@@ -385,20 +434,16 @@ def doStream(client,self,url,options):
             os.makedirs(movieDir)
 
         # Build a new transcoder dictionary
-        transcoderNew(client,options)
-        sessions[client]['transcoder']['source']=fpath
-        sessions[client]['transcoder']['dest']=movieDir
-        
-        # Register the transcoder options & kick off the codec, lets hope we mapped the right rate!
-        transcoderLaunch(client)
-        
-        # Register the duration from the transcode with the ufid, we'll want it later if there is a quick restart
-        sessions[client][fpath]['duration']=sessions[client]['transcoder']['duration']
-
-        # Create the file maps
+        transcoderNew(client,options,fpath,movieDir)
+                
+        # Create the file maps, there is the possibility that the duration is NOT set
+        # we need this to make the map size. It can happen when STM restarts with an
+        # expired session so we must check for it and MAX out the map size to something
+        # silly like a 5 hour length
+        duration=int(sessions[client][fpath]['duration'])
+        if duration==0: duration=(5*60*60)/DEFAULT_SEGLEN
         for rate in ratelookup:
-            if not sessions[client][fpath].has_key(ratelookup[rate]):
-                sessions[client][fpath][ratelookup[rate]]="0"*((int(sessions[client][fpath]['duration'])/DEFAULT_SEGLEN)+1)
+            sessions[client][fpath][rate]="0"*((duration/DEFAULT_SEGLEN)+1)
             
         # We must now build the index files for our UFID
         try:
@@ -434,84 +479,45 @@ def doStream(client,self,url,options):
             debugLog("doStream(): {0}".format(traceback.format_exc()))
 
     # Handle any completed segments
-    #transcoderProcess(client)
-    
-    # Check if this segment has not been completed
-    #if request.endswith("ts")==True AND sessions[client][fpath][int(request[-8:-3])]=="0":
-    #    if not next seg OR rate change OR tcoder!=thisfile
-    #        restartTranscoder at new rate/file/seg
-    #    while 1:
-    #        transcoderProcess(client)
-    #        if segno == done: break
-            
-    # Check if we have a transcoder that its running for the right movie
-    if not fpath==sessions[client]['transcoder']['source']:
-        debugLog("doStream(): Movie switch requested, new movie: {0}".format(fpath))
-        transcoderNew(client, options)
+    transcoderProcess(client)
 
-        sessions[client]['transcoder']['source']=fpath
-        sessions[client]['transcoder']['dest']=movieDir
+
+    if request.endswith("m3u8")==True:
+        # Extract the rate parameter from the filename
+        rate,junk1,junk2=request.partition(".")
         
-        # Register the transcoder options & kick off the codec, lets hope we mapped the right rate!
-        transcoderLaunch(client)
-
-    # Check if its a seq request and if so then keep seglast SEG_LOOK_AHEAD ahead, ack if needed
-    if request.endswith("ts")==True and sessions[client]['transcoder'].has_key('process'):
-        # Extract segment number and rate value
-        segno=int(request[-8:-3])
+        if rate!="index" and rate!=sessions[client]['transcoder']['rate']:
+            # Register the transcoder options & kick off the codec, lets hope we mapped the right rate!
+            # Guess the seg as seglast-1
+            segstart=sessions[client]['transcoder']['seglast']-1
+            transcoderNew(client,options,fpath,movieDir,rate,segstart)
+            transcoderLaunch(client)
+        
+    if request.endswith("ts")==True:
+        # Check if this segment has not been completed
+        segwanted=int(request[-8:-3])
         rate,junk1,junk2=request.partition("-")
         
-        # Check this is the rate we're doing, if not we need to re-kick the transcoder
-        if rate!=sessions[client]['transcoder']['rate']:
-            debugLog("doStream(): Forcing transcoder restart, new rate({0}) & segment({1})".format(rate,segno))
-            sessions[client]['transcoder']['rate']=rate
-            sessions[client]['transcoder']['segstart']=segno
-            transcoderLaunch(client)
+        if sessions[client][fpath][rate][segwanted]=="0":
+            # Check if this segment is about to come from the transcoder, if so we may wait
+            # also have any transcoder params changed if so we must restart THEN wait
+            if segwanted>sessions[client]['transcoder']['seglast']+1 or fpath!=sessions[client]['transcoder']['source'] or rate!=sessions[client]['transcoder']['rate'] or segwanted<sessions[client]['transcoder']['segstart']:
+                debugLog("doStream(): Forcing transcoder restart, new file({0}), rate({1}), segment({2})".format(fpath,rate,segwanted))
+                # Build a new transcoder dictionary
+                transcoderNew(client,options,fpath,movieDir,rate,segwanted)
+                transcoderLaunch(client)
 
-        if segno<sessions[client]['transcoder']['segstart'] or segno>sessions[client]['transcoder']['seglast']+1:
-            # Looks like a jump, we should restart the codec
-            debugLog("doStream(): Forcing transcoder restart, segment jump from {0} to {1}".format(sessions[client]['transcoder']['seglast'],segno))
-            sessions[client]['transcoder']['segstart']=segno
-            transcoderLaunch(client)
-
-        # Check if this segment has been done
-        if segno==sessions[client]['transcoder']['seglast']+1:
-            debugLog("doStream(): Waiting for the next segment to complete")
-            while 1:
-                sessions[client]['transcoder']['process'].poll()
-                if sessions[client]['transcoder']['process'].returncode!=None: break
-                status=sessions[client]['transcoder']['seglist'].readline()
-                # Extract segment number from output
-                if not status=="" and not status[0:3]=="Dur":
-                    debugLog("doStream(): Segwait - Got '{0}'".format(status))
-                    junk,status=status.rsplit(" ",1)
-                    if int(status)==segno:
-                        debugLog("doStream(): Segwait - Got {0}".format(segno))
-                        break
-                    elif int(status)<segno:
-                        debugLog("doStream(): Segwait - Got {0} want {1} - Waiting".format(int(status),segno))
-                    else:
-                        # Should never be, means somehow we skipped this segment!!
-                        debugLog("doStream(): Segwait - Got {0} want {1} - Reseting transcoder".format(int(status),segno))
-                        sessions[client]['transcoder']['segstart']=segno
-                        transcoderLaunch(client)
-                        break
+            # Wait for our segment here
+            while transcoderProcess(client):
+                if sessions[client][fpath][rate][segwanted]=="1":
+                    debugLog("doStream(): Segwait - Got {0}".format(request))
+                    break
                 else:
                     # Spin for a short time
                     debugLog("doStream(): SPINNING")
                     time.sleep(0.25)
-                    
-        sessions[client]['transcoder']['seglast']=segno
-
-        # Ack another single segment for this one we've sent
-        sessions[client]['transcoder']['process'].poll()
-        pstat=sessions[client]['transcoder']['process'].returncode
-        if pstat==None:
-            # Send the ack, there is a race here, it might finish between the poll & the ack!
-            sessions[client]['transcoder']['process'].stdin.write("ack")
-            debugLog("doStream(): Ack - One more seg please")
         else:
-            debugLog("doStream(): Ack - Process is complete or dead")
+            debugLog("doStream(): Already have {0} in the filemap".format(request))
 
     # Path to output file
     fpath=movieDir+request
@@ -550,6 +556,8 @@ def doMetadata(client,self,url,options):
             execStr='"'+execDir+'/ffmpeg-stm.exe" metadata "'+fpath+'"'
             execStr=execStr.replace('/','\\')
             tempFile=tempFile.replace('/','\\')
+        elif sys.platform=='darwin':
+            execStr=[execDir+'/ffmpeg-stm_osx','metadata',fpath]
         else:
             execStr=[execDir+'/ffmpeg-stm','metadata',fpath]
 
@@ -571,6 +579,10 @@ def doMetadata(client,self,url,options):
             response=stream.read()
             stream.close()
 
+            decode=json.loads(response[0:json_length])
+            duration=int(decode['length'])
+            if not sessions[client].has_key(fpath): sessions[client][fpath]={}
+            sessions[client][fpath]['duration']=float(duration)
             # Decode metadata for later usage
             #decode=json.loads(response[0:json_length])
             #sessions[client][fpath]=decode
