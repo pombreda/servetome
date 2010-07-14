@@ -19,13 +19,14 @@
 # 06/07/10  KW   v304    Reworking of doStream to stop re-tcoding already done segs
 # 13/07/10  KW   v305    New streaming implementation complete, still some bugs
 # 14/07/10  KW   v306    Finished debugging new streaming, added proper rate option usage to doStream
+# 14/07/10  KW   v307    Fixed error on index.m3u8 generation, now generated everytime requested
 #
 #
 # TODO
 # ----
 # HTTP digest implementation
 
-STM_VERSION = "3.06wip"
+STM_VERSION = "3.07wip"
 
 import string,cgi,time
 import ConfigParser
@@ -63,7 +64,7 @@ SESSION_TIMEOUT_STEP=10
 COOKIENAME="STREAMSESSIONID"
 debugHandle=None
 commandHandle=None
-ratelookup=['veryhigh','high','midhigh','mid','midlow','low','verylow']
+ratelookup={'veryhigh':2048000,'high':1440000,'midhigh':720000,'mid':360000,'midlow':144000,'low':96000,'verylow':64000}
 
 # RepeatTimer class - Copyright (c) 2009 Geoffrey Foster
 # http://g-off.net/software/a-python-repeatable-threadingtimer-class
@@ -186,6 +187,7 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
     sessions[client]['transcoder']['seglen']=DEFAULT_SEGLEN
     sessions[client]['transcoder']['seglast']=0
     sessions[client]['transcoder']['segack']=0
+    sessions[client]['transcoder']['segcount']=int(sessions[client][fpath]['duration']/DEFAULT_SEGLEN)+1
     sessions[client]['transcoder']['audio']='any'
     sessions[client]['transcoder']['subs']='nil'
     sessions[client]['transcoder']['gain']='0.0'
@@ -225,7 +227,7 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
     segstart=sessions[client]['transcoder']['segstart']
     
     if fpath!="" and sessions[client].has_key(fpath) and sessions[client][fpath].has_key(rate):
-        while sessions[client][fpath][rate][segstart]=="1":
+        while segstart<len(sessions[client][fpath][rate]) and sessions[client][fpath][rate][segstart]=="1":
             segstart+=1
         debugLog("transcoderNew() - bumped segstart to {0}".format(segstart))
         # Save the new start segment
@@ -254,6 +256,8 @@ def transcoderLaunch(client):
 
     if not sessions[client].has_key('transcoder'):
         debugLog("transcoderLaunch(): Missing client transcoder key???")
+    elif sessions[client]['transcoder']['segstart']>=sessions[client]['transcoder']['segcount']:
+        debugLog("transcoderLaunch(): Nothing to transcode segstart>=segcount")        
     else:
         transcoder=sessions[client]['transcoder']
         
@@ -288,8 +292,6 @@ def transcoderLaunch(client):
         transcoder['seglist']=finput
 
         # Wait for duration spit out + 1st segment output, stops race on 1st seg read
-        status=transcoder['seglist'].readline()
-        # Extract segment number from output
         while 1:
             transcoder['process'].poll()
             if transcoder['process'].returncode!=None: break
@@ -304,12 +306,11 @@ def transcoderLaunch(client):
                 break
             else:
                 # Spin for a short time
-                debugLog("transcoderLaunch(): SPINNING")
+                #debugLog("transcoderLaunch(): SPINNING")
                 time.sleep(0.05)
 
         # Initialise the dictionary for segment loading 
         transcoder['seglast']=transcoder['segstart']-1
-        transcoder['segcount']=transcoder['duration']/DEFAULT_SEGLEN
 
 def transcoderProcess(client):
     if not sessions[client].has_key('transcoder'):
@@ -487,79 +488,21 @@ def doStream(client,self,url,options):
         # Build a new transcoder dictionary
         transcoderNew(client,options,fpath,movieDir)
                 
-        # Create the file maps, there is the possibility that the duration is NOT set
-        # we need this to make the map size. It can happen when STM restarts with an
-        # expired session so we must check for it and MAX out the map size to something
-        # silly like a 5 hour length
+        # Generate all of the UUID/<rate>.m3u8, index.m3u8 will say whays actually available
+        makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"low",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+        makeM3U8(movieDir,"verylow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+
+        # Create the file maps
         duration=int(sessions[client][fpath]['duration'])
         if duration==0: duration=(5*60*60)/DEFAULT_SEGLEN
         for rate in ratelookup:
             sessions[client][fpath][rate]="0"*((duration/DEFAULT_SEGLEN)+1)
             
-        # We must now build the index files for our UFID
-        try:
-            device=sessions[client]['transcoder']['device']
-            transport=sessions[client]['transcoder']['transport']
-            # Generate UUID/index.m3u8
-            f=open(movieDir+"index.m3u8","w")
-            f.write("#EXTM3U\n")
-            if transport=='local':
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
-                f.write("veryhigh.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
-                f.write("high.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
-                f.write("midhigh.m3u8\n")
-            elif transport=='wifi':
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
-                f.write("high.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
-                f.write("veryhigh.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
-                f.write("midhigh.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
-                f.write("mid.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
-                f.write("midlow.m3u8\n")
-            elif transport=='3g':
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
-                f.write("midlow.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
-                f.write("high.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
-                f.write("midhigh.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
-                f.write("mid.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=96000\n")
-                f.write("low.m3u8\n")
-                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=64000\n")
-                f.write("verylow.m3u8\n")
-            f.close()
-        
-            # Generate UUID/<rate>.m3u8
-            if transport=='local':
-                makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            elif transport=='wifi':
-                makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            elif transport=='3g':
-                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"low",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-                makeM3U8(movieDir,"verylow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            else:
-                debugLog("doStream(): ERROR invalid transport in request")
-        except:
-            debugLog("doStream(): We had an exception during the file build")
-            debugLog("doStream(): {0}".format(traceback.format_exc()))
-
     # Handle any completed segments
     transcoderProcess(client)
 
@@ -568,7 +511,72 @@ def doStream(client,self,url,options):
         # Extract the rate parameter from the filename
         rate,junk1,junk2=request.partition(".")
         
-        if rate!="index" and rate!=sessions[client]['transcoder']['rate']:
+        if rate=="index":
+            # Build a new transcoder dictionary
+            transcoderNew(client,options,fpath,movieDir)
+            debugLog("doStream(): Building index.m3u8")
+            # We must now build the index files for our UFID
+            try:
+                device=sessions[client]['transcoder']['device']
+                transport=sessions[client]['transcoder']['transport']
+                # Generate UUID/index.m3u8
+                f=open(movieDir+"index.m3u8","w")
+                f.write("#EXTM3U\n")
+                if ratelookup.has_key(transport):
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH={0}\n".format(ratelookup[transport]))
+                    f.write("{0}.m3u8\n".format(transport))                
+                elif transport=='local':
+                    if device=='ipad' or device=='iphone4':
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                        f.write("veryhigh.m3u8\n")
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                        f.write("high.m3u8\n")
+                    else:
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                        f.write("high.m3u8\n")
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                        f.write("veryhigh.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                    f.write("midhigh.m3u8\n")
+                elif transport=='wifi':
+                    if device=='ipad' or device=='iphone4':
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                        f.write("veryhigh.m3u8\n")
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                        f.write("high.m3u8\n")
+                    else:
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                        f.write("high.m3u8\n")
+                        f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                        f.write("veryhigh.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                    f.write("midhigh.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
+                    f.write("mid.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
+                    f.write("midlow.m3u8\n")
+                elif transport=='3g':
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
+                    f.write("midlow.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                    f.write("high.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                    f.write("midhigh.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
+                    f.write("mid.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=96000\n")
+                    f.write("low.m3u8\n")
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=64000\n")
+                    f.write("verylow.m3u8\n")
+                else:
+                    debugLog("doStream(): ERROR invalid transport in request")
+                f.close()
+            
+            except:
+                debugLog("doStream(): We had an exception during the file build")
+                debugLog("doStream(): {0}".format(traceback.format_exc()))
+
+        elif rate!=sessions[client]['transcoder']['rate']:
             # Register the transcoder options & kick off the codec, lets hope we mapped the right rate!
             # Guess the seg as seglast-1
             segstart=sessions[client]['transcoder']['seglast']-1
@@ -596,7 +604,7 @@ def doStream(client,self,url,options):
                     break
                 else:
                     # Spin for a short time
-                    debugLog("doStream(): SPINNING")
+                    #debugLog("doStream(): SPINNING")
                     time.sleep(0.25)
         else:
             debugLog("doStream(): Already have {0} in the filemap".format(request))
