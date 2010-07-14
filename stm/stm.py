@@ -18,14 +18,14 @@
 # 01/07/10  CT   v303    JSON UTF-8 Fix
 # 06/07/10  KW   v304    Reworking of doStream to stop re-tcoding already done segs
 # 13/07/10  KW   v305    New streaming implementation complete, still some bugs
+# 14/07/10  KW   v306    Finished debugging new streaming, added proper rate option usage to doStream
 #
 #
 # TODO
 # ----
 # HTTP digest implementation
-# Bugfix the restart without metadata condition - Need duration to build maps & m3u8 files
 
-STM_VERSION = "3.05wip"
+STM_VERSION = "3.06wip"
 
 import string,cgi,time
 import ConfigParser
@@ -63,7 +63,6 @@ SESSION_TIMEOUT_STEP=10
 COOKIENAME="STREAMSESSIONID"
 debugHandle=None
 commandHandle=None
-#ratelookup={'wifi':'veryhigh','veryhigh':'veryhigh','high':'high','midhigh':'midhigh','mid':'mid','midlow':'midlow','low':'low','verylow':'verylow',}
 ratelookup=['veryhigh','high','midhigh','mid','midlow','low','verylow']
 
 # RepeatTimer class - Copyright (c) 2009 Geoffrey Foster
@@ -180,6 +179,8 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
     transcoderKill(client)
     if segstart<0: segstart=0
     sessions[client]['transcoder']={}
+    sessions[client]['transcoder']['device']='iPad'
+    sessions[client]['transcoder']['transport']='wifi'
     sessions[client]['transcoder']['rate']=rate
     sessions[client]['transcoder']['segstart']=segstart
     sessions[client]['transcoder']['seglen']=DEFAULT_SEGLEN
@@ -201,11 +202,11 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
         optname=""
         optval=""
         if(opt): optname,optval=opt.split('=')
-        #if optname=='rate' and ratelookup.has_key(optval):
-        #if optname=='rate' and optval!="":
-            #sessions[client]['transcoder']['rate']=ratelookup[optval]
-            #sessions[client]['transcoder']['rate']=optval
-        if optname=='audio' and optval!="":
+        if optname=='rate' and optval!="":
+            sessions[client]['transcoder']['transport']=optval.lower()
+        elif optname=='device' and optval!="":
+            sessions[client]['transcoder']['device']=optval.lower()
+        elif optname=='audio' and optval!="":
             sessions[client]['transcoder']['audio']=optval
         elif (optname=='subtitles' or optname=='subtitle') and optval!="":
             sessions[client]['transcoder']['subs']=optval
@@ -371,9 +372,51 @@ def transcoderProcess(client):
 
         return True
 
+def transcoderMetadata(client,fpath):
+    try:
+        response=""
+        tempFile=tempDir+'/thumbnail.bin'
+        if sys.platform=='win32':
+            execStr='"'+execDir+'/ffmpeg-stm.exe" metadata "'+fpath+'"'
+            execStr=execStr.replace('/','\\')
+            tempFile=tempFile.replace('/','\\')
+        elif sys.platform=='darwin':
+            execStr=[execDir+'/ffmpeg-stm_osx','metadata',fpath]
+        else:
+            execStr=[execDir+'/ffmpeg-stm','metadata',fpath]
 
+        debugLog("transcoderMetadata(): Exec: {0}".format(execStr))
+        debugLog("transcoderMetadata(): Thum: {0}".format(tempFile))
 
+        # Spawn a sub process to make the thumbnail, capture output to tempfile, wait for it to complete
+        foutput = open(tempFile,'w')
+        ffmpeg = subprocess.Popen(execStr, stdout=foutput,stderr=subprocess.PIPE)
+        ffmpeg.wait()
+        foutput.close()
         
+        # Now open the result of the exec
+        if ffmpeg.returncode==0 or 1:
+            stream=open(tempFile,'rb')
+            # Read length of JSON segment + JSON + whole JPEG segment
+            json_length,=struct.unpack('l', stream.read(4))
+            response=stream.read()
+            stream.close()
+
+            decode=json.loads(response[0:json_length])
+            duration=int(decode['length'])
+            if not sessions[client].has_key(fpath): sessions[client][fpath]={}
+            sessions[client][fpath]['duration']=float(duration)
+        else:
+            debugLog("transcoderMetadata(): Invalid return code from ffmpeg???")
+            response=0,""
+    except os.error:
+        debugLog("transcoderMetadata(): OS Error thrown???")
+        response=0,""
+    return json_length,response
+
+
+
+
 def doRoot(self,url,options):
     response="<html>"
     response+="<head><title>ServeToMe</title></head>"
@@ -433,6 +476,14 @@ def doStream(client,self,url,options):
         else:
             os.makedirs(movieDir)
 
+        # Check we have a duration for this movie, there is the possibility for STM
+        # to start stright into a movie without ever having gone through the metadata
+        # call, so we may have to call metadata ourselves to get the duration before
+        # going any further!!
+        if not sessions[client][fpath].has_key('duration'):
+            debugLog("doStream(): Streaming has started without metadata request, missing duration")
+            transcoderMetadata(client,fpath)
+        
         # Build a new transcoder dictionary
         transcoderNew(client,options,fpath,movieDir)
                 
@@ -447,33 +498,64 @@ def doStream(client,self,url,options):
             
         # We must now build the index files for our UFID
         try:
+            device=sessions[client]['transcoder']['device']
+            transport=sessions[client]['transcoder']['transport']
             # Generate UUID/index.m3u8
             f=open(movieDir+"index.m3u8","w")
             f.write("#EXTM3U\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
-            f.write("veryhigh.m3u8\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
-            f.write("high.m3u8\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
-            f.write("midhigh.m3u8\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
-            f.write("mid.m3u8\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
-            f.write("midlow.m3u8\n")
-            f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=96000\n")
-            f.write("low.m3u8\n")
-            #f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=64000\n")
-            #f.write("verylow.m3u8\n")
+            if transport=='local':
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                f.write("veryhigh.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                f.write("high.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                f.write("midhigh.m3u8\n")
+            elif transport=='wifi':
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                f.write("high.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
+                f.write("veryhigh.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                f.write("midhigh.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
+                f.write("mid.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
+                f.write("midlow.m3u8\n")
+            elif transport=='3g':
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=144000\n")
+                f.write("midlow.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1440000\n")
+                f.write("high.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=720000\n")
+                f.write("midhigh.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=360000\n")
+                f.write("mid.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=96000\n")
+                f.write("low.m3u8\n")
+                f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=64000\n")
+                f.write("verylow.m3u8\n")
             f.close()
         
             # Generate UUID/<rate>.m3u8
-            makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"low",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
-            makeM3U8(movieDir,"verylow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+            if transport=='local':
+                makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+            elif transport=='wifi':
+                makeM3U8(movieDir,"veryhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+            elif transport=='3g':
+                makeM3U8(movieDir,"high",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"midhigh",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"mid",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"midlow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"low",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+                makeM3U8(movieDir,"verylow",DEFAULT_SEGLEN,sessions[client][fpath]['duration'])
+            else:
+                debugLog("doStream(): ERROR invalid transport in request")
         except:
             debugLog("doStream(): We had an exception during the file build")
             debugLog("doStream(): {0}".format(traceback.format_exc()))
@@ -481,7 +563,7 @@ def doStream(client,self,url,options):
     # Handle any completed segments
     transcoderProcess(client)
 
-
+    # Check if m3u8 is enquiring on a different stream, we may need to restart
     if request.endswith("m3u8")==True:
         # Extract the rate parameter from the filename
         rate,junk1,junk2=request.partition(".")
@@ -549,66 +631,24 @@ def doMetadata(client,self,url,options):
     debugLog("doMetadata(): Path: {0}".format(url))
     fpath=buildPath(url)
     debugLog("doMetadata(): Path: {0}".format(fpath))
-    try:
-        response=""
-        tempFile=tempDir+'/thumbnail.bin'
-        if sys.platform=='win32':
-            execStr='"'+execDir+'/ffmpeg-stm.exe" metadata "'+fpath+'"'
-            execStr=execStr.replace('/','\\')
-            tempFile=tempFile.replace('/','\\')
-        elif sys.platform=='darwin':
-            execStr=[execDir+'/ffmpeg-stm_osx','metadata',fpath]
-        else:
-            execStr=[execDir+'/ffmpeg-stm','metadata',fpath]
 
-        debugLog("doMetadata(): Exec: {0}".format(execStr))
-        debugLog("doMetadata(): Thum: {0}".format(tempFile))
-
-        # Spawn a sub process to make the thumbnail, capture output to tempfile, wait for it to complete
-        foutput = open(tempFile,'w')
-        ffmpeg = subprocess.Popen(execStr, stdout=foutput,stderr=subprocess.PIPE)
-        ffmpeg.wait()
-        foutput.close()
-        
-        # Now open the result of the exec
-        if ffmpeg.returncode==0 or 1:
-            stream=open(tempFile,'rb')
-            
-            # Read length of JSON segment + JSON + whole JPEG segment
-            json_length,=struct.unpack('l', stream.read(4))
-            response=stream.read()
-            stream.close()
-
-            decode=json.loads(response[0:json_length])
-            duration=int(decode['length'])
-            if not sessions[client].has_key(fpath): sessions[client][fpath]={}
-            sessions[client][fpath]['duration']=float(duration)
-            # Decode metadata for later usage
-            #decode=json.loads(response[0:json_length])
-            #sessions[client][fpath]=decode
-            
-            #debugLog("doMetadata(): JSON Length: {0}".format(json_length))
-            #debugLog("doMetadata(): JPEG Length: {0}".format(len(response)-json_length))
-            #debugLog("doMetadata(): Duration: {0}".format(sessions[client][fpath]['length']))
-
-            # Send headers
-            chocchip=Cookie.SimpleCookie()
-            chocchip[COOKIENAME]=sessions[client]['hash']
-            self.send_response(200)
-            self.send_header('Set-Cookie',chocchip.output(header=''))
-            self.send_header('Servetome-Version',STM_VERSION)
-            self.send_header('Connection','close')
-            self.send_header('Json-Length',json_length)
-            self.send_header('Content-Length',len(response))
-            self.send_header('Content-Type','application/json')
-            self.end_headers()
-            self.wfile.write(response)
-        else:
-            self.send_error(500,'Ffmpeg error on: %s' % self.path)
-            
-        
-    except os.error:
+    json_length,response=transcoderMetadata(client,fpath)
+    if response!="" and json_length!=0:
+        # Send headers
+        chocchip=Cookie.SimpleCookie()
+        chocchip[COOKIENAME]=sessions[client]['hash']
+        self.send_response(200)
+        self.send_header('Set-Cookie',chocchip.output(header=''))
+        self.send_header('Servetome-Version',STM_VERSION)
+        self.send_header('Connection','close')
+        self.send_header('Json-Length',json_length)
+        self.send_header('Content-Length',len(response))
+        self.send_header('Content-Type','application/json')
+        self.end_headers()
+        self.wfile.write(response)
+    else:
         self.send_error(500,'Decoding error on: %s' % self.path)
+            
        
 def doDirectory(client,self,url,options):
     # Reset session idle timer
