@@ -3,9 +3,12 @@ lSTM
 
 Intro
 -----
-Welcome to Linux ServeToMe (lSTM), a command line based python server for the
-iPad/iPhone application StreamToMe. The python script is accompanied by a
-custom build of ffmpeg.
+Welcome to ServeToMe (lSTM), a command line based python server for the
+iPad/iPhone application StreamToMe. It should work with Linux, OSX and
+Windows. The python script is accompanied by a custom build of ffmpeg in the
+bin/ directory for the different OS's, for Debian based systems please
+rename the debian flagged version to "ffmpeg-stm" and remove or rename the
+standard linux version.
 
 The program is configured via an stm.cfg file in the same directory as stm.py
 and should be fairly self explanatory. Please make sure the given temp/bin
