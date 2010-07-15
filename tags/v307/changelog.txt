@@ -1,0 +1,6 @@
+Change Log
+==========
+v100 - Initial version for StreamToMe V2.x
+v300 - Initial versino for StreamToMe V3.x
+v307 - Bug fixes & improved streaming logic
+
