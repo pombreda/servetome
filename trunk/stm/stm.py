@@ -26,7 +26,7 @@
 # ----
 # HTTP digest implementation
 
-STM_VERSION = "3.07wip"
+STM_VERSION = "3.07"
 
 import string,cgi,time
 import ConfigParser
