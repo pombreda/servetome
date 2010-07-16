@@ -20,6 +20,7 @@
 # 13/07/10  KW   v305    New streaming implementation complete, still some bugs
 # 14/07/10  KW   v306    Finished debugging new streaming, added proper rate option usage to doStream
 # 14/07/10  KW   v307    Fixed error on index.m3u8 generation, now generated everytime requested
+# 16/07/10  CT   v308    Flat file modes added
 #
 #
 # TODO
@@ -675,14 +676,14 @@ def doDirectory(client,self,url,options):
         date=3
         none=4
         
-    class Heirarchy:
+    class Hierarchy:
         folder=0
         flat_folder=1
         flat=2
         
     order=Order.none
     sort=Sort.none
-    heirarchy=Heirarchy.folder
+    hierarchy=Hierarchy.folder
     
     for opt in options:
         optname=""
@@ -704,13 +705,16 @@ def doDirectory(client,self,url,options):
                 sort=Sort.date;
             else:
                 sort=Sort.none;
-        if optname=='heirarchy':
+        if optname=='hierarchy':
+            debugLog("Option Value : " + optval)
             if optval=='folder':
-                heirarchy=Heirarchy.folder;
-            elif optval=='flat':
-                heirarchy=Heirarchy.flat;
+                hierarchy=Hierarchy.folder;
+            elif optval=='flattenAndSort':
+                hierarchy=Hierarchy.flat;
+            elif optval=='flatten':
+                hierarchy=Hierarchy.flat_folder;
             else:
-                heirarchy=Heirarchy.folder;
+                hierarchy=Hierarchy.folder;
 
     try:
         response=""
@@ -738,37 +742,43 @@ def doDirectory(client,self,url,options):
                 mtime=os.stat(fpath+"/"+item).st_mtime
                 if os.path.isdir(fpath+"/"+item) == True:
                     if item[0]!=".":
-                        itemlist.append(('',item,'folder',mtime))
+
+                        # Define a new list to store a list of all filenames recursively in a directory
+                        flatList=[]
+
+                        # If this is a flat list + sort then keep folder ordering then sort the file list before returning
+                        if hierarchy==Hierarchy.flat_folder:
+                            flatList=listFiles(fpath, item)
+                            flatList=sortList(flatList, sort, order)
+                        # If this is a flat list, then don't sort now and wait for the final sort
+                        elif hierarchy==Hierarchy.flat:
+                            flatList=listFiles(fpath, item)
+                        # If the user did not specify flat mode, then just add this directory
+                        else:
+                            itemlist.append(('',item,'folder',mtime))
+                            
+                        # If there is atleast something in the recursive list, we add it to the main list
+                        if flatList>0:
+                            itemlist.extend(flatList)
+
                 else:
                     lowitem=string.lower(item)
                     #debugLog("doDirectory(): lowitem: {0}".format(lowitem))
                     if lowitem.endswith(extensionList)==True:
                         itemlist.append(('',item,'file',mtime))
         
-                
         debugLog("doDirectory(): Order: {0}".format(order))
         debugLog("doDirectory(): Sort: {0}".format(sort))
-        debugLog("doDirectory(): Heira: {0}".format(heirarchy))
+        debugLog("doDirectory(): Heira: {0}".format(hierarchy))
 
         #for item in itemlist:
         #    debugLog("doDirectory(): In: {0}".format(item))
 
         if rootlevel==False:
             debugLog("doDirectory(): Sorting")
-            # itemlist tuple: ident, filename, type, mtime
-
-            if sort==Sort.name:
-                itemlist=sorted(itemlist, key=itemgetter(1))
-                itemlist=sorted(itemlist, key=itemgetter(2), reverse=True)
-            elif sort==Sort.date:
-                itemlist=sorted(itemlist, key=itemgetter(3), reverse=True)
-                #itemlist=sorted(itemlist, key=itemgetter(2), reverse=True)
-                
-            #if heirarchy==Heirarchy.folder:
-            #    sorted(itemlist, key=lambda items: items[2])
-
-            if order==Order.descending:
-                itemlist.reverse()
+            
+            # Call sorting on the list
+            itemlist = sortList(itemlist, sort, order)
 
         #for item in itemlist:
         #    debugLog("doDirectory(): Out: {0}".format(item))
@@ -776,6 +786,7 @@ def doDirectory(client,self,url,options):
         # Now dump the sorted table
         response=response+"["
         loop=0
+
         while loop<len(itemlist):
             ident,name,type,mtime=itemlist[loop]
 
@@ -818,7 +829,77 @@ def doDirectory(client,self,url,options):
     except IOError:
         self.send_error(500,'Decoding error on: %s' % self.path)
 
+
+#Recursively find files in a given directory
+def listFiles(basePath, dir):
+    debugLog("listFile(): Base=" +basePath +"   Dir=" + dir)
+
+    returnList=[]
+    
+    if os.path.isdir(basePath + "/" + dir) == True:
+        basedir = basePath + "/" + dir
+        subdirlist = []
+        for item in os.listdir(basedir):
+            if os.path.isfile(item):
+                debugLog("File Item Prefetch =" + item)
+
+                # If this file extension is supported, then add this relative file path to the list
+                if isReadableFile(item):
+                    mtime=os.stat(basedir + "/" + item).st_mtime
+                    returnList.append(('', dir + "/" + item, 'absolutePath', mtime))
+            else:
+                subdirlist.append(os.path.join(dir, item))
+                
+        for subdir in subdirlist:
+            subList=[]
+            subList=listFiles(basePath, subdir)
+            returnList.extend(subList)
+
+    # If this is not a directory, we assume it is a file and add this relative file path to the list
+    # "absolutePath" assumes the path you start out with is the root path.
+    else:
+        mtime=os.stat(basePath + "/" + dir).st_mtime
+        fileName = os.path.basename(basePath + "/" + dir)
+        debugLog("File Item =" + fileName)
+        if isReadableFile(fileName):
+            returnList.append(('', dir, 'absolutePath', mtime))
+
+    return returnList
+
+
+#Given a list, sort by type and then by order
+def sortList(listToSort, sortType, sortOrder):
+    class Sort:
+        ident=0            
+        name=1
+        type=2
+        date=3
+        none=4
+
+    class Order:
+        none=0
+        ascending=1
+        descending=2
+
+    if sortType==Sort.name:
+        listToSort=sorted(listToSort, key=itemgetter(1))
+        listToSort=sorted(listToSort, key=itemgetter(2), reverse=True)
+    elif sortType==Sort.date:
+        listToSort=sorted(listToSort, key=itemgetter(3), reverse=True)
+
+    if sortOrder==Order.descending:
+        listToSort.reverse()
+
+    return listToSort
+
+
+#Test to see if the filename are ones supported by StreamToMe
+def isReadableFile(fileName):
+    lowitem=string.lower(fileName)
+    return lowitem.endswith(extensionList)==True
         
+
+
         
 class requestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -832,7 +913,7 @@ class requestHandler(BaseHTTPRequestHandler):
         if purl.params:   debugLog("requestHandler(): Params:   {0}".format(purl.params))
         if purl.query:    debugLog("requestHandler(): Query:    {0}".format(purl.query))
         if purl.fragment: debugLog("requestHandler(): Fragment: {0}".format(purl.fragment))
-        
+  
         options=purl.query.split("&")
         url=urllib.unquote(purl.path).split('/')
         
