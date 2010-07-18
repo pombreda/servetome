@@ -20,14 +20,14 @@
 # 13/07/10  KW   v305    New streaming implementation complete, still some bugs
 # 14/07/10  KW   v306    Finished debugging new streaming, added proper rate option usage to doStream
 # 14/07/10  KW   v307    Fixed error on index.m3u8 generation, now generated everytime requested
-# 16/07/10  CT   v308    Flat file modes added
+# 16/07/10  CT   v308    Flat file modes added, aud/subs options fix
 #
 #
 # TODO
 # ----
 # HTTP digest implementation
 
-STM_VERSION = "3.07"
+STM_VERSION = "3.08"
 
 import string,cgi,time
 import ConfigParser
@@ -209,9 +209,9 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
             sessions[client]['transcoder']['transport']=optval.lower()
         elif optname=='device' and optval!="":
             sessions[client]['transcoder']['device']=optval.lower()
-        elif optname=='audio' and optval!="":
+        elif (optname=='audio' or optname=='aud') and optval!="":
             sessions[client]['transcoder']['audio']=optval
-        elif (optname=='subtitles' or optname=='subtitle') and optval!="":
+        elif (optname=='subtitles' or optname=='subtitle' or optname=='sub') and optval!="":
             sessions[client]['transcoder']['subs']=optval
         elif optname=='gain' and optval!="":
             sessions[client]['transcoder']['gain']=optval
