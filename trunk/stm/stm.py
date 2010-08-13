@@ -799,7 +799,7 @@ def doDirectory(client,self,url,options):
                 name='#################' + ''.join(stripped)
 
             if ident:
-                jsonitem=json.dumps({"identifier":str(loop), "name": name, "type": "folder"})
+                jsonitem=json.dumps({"id":str(loop), "name": name, "type": "folder"})
             else:
                 jsonitem=json.dumps({"name": name, "type": type})
             if loop>0: response=response+","
