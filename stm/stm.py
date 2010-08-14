@@ -21,13 +21,14 @@
 # 14/07/10  KW   v306    Finished debugging new streaming, added proper rate option usage to doStream
 # 14/07/10  KW   v307    Fixed error on index.m3u8 generation, now generated everytime requested
 # 16/07/10  CT   v308    Flat file modes added, aud/subs options fix
+# 14/08/10  KW   v309    Updates for client v3.1.1 changes that caused stm to break, "id" & "rate"
 #
 #
 # TODO
 # ----
 # HTTP digest implementation
 
-STM_VERSION = "3.08"
+STM_VERSION = "3.09"
 
 import string,cgi,time
 import ConfigParser
@@ -65,7 +66,17 @@ SESSION_TIMEOUT_STEP=10
 COOKIENAME="STREAMSESSIONID"
 debugHandle=None
 commandHandle=None
-ratelookup={'veryhigh':2048000,'high':1440000,'midhigh':720000,'mid':360000,'midlow':144000,'low':96000,'verylow':64000}
+
+ratelookupBPS={'veryhigh':2048000,'high':1440000,'midhigh':720000,'mid':360000,'midlow':144000,'low':96000,'verylow':64000,
+'wifiveryhigh':2048000,'wifihigh':1440000,'wifimidhigh':720000,'wifimid':360000,'wifimidlow':144000,'wifilow':96000,'wifiverylow':64000,
+'localveryhigh':2048000,'localhigh':1440000,'localmidhigh':720000,'localmid':360000,'localmidlow':144000,'locallow':96000,'localverylow':64000,
+'3gveryhigh':720000,'3ghigh':720000,'3gmidhigh':720000,'3gmid':360000,'3gmidlow':144000,'3glow':96000,'3gverylow':64000}
+
+ratelookupFFM={'veryhigh':'veryhigh','high':'high','midhigh':'midhigh','mid':'mid','midlow':'midlow','low':'low','verylow':'verylow',
+'wifiveryhigh':'veryhigh','wifihigh':'high','wifimidhigh':'midhigh','wifimid':'mid','wifimidlow':'midlow','wifilow':'low','wifiverylow':'verylow',
+'localveryhigh':'veryhigh','localhigh':'high','localmidhigh':'midhigh','localmid':'mid','localmidlow':'midlow','locallow':'low','localverylow':'verylow',
+'3gveryhigh':'veryhigh','3ghigh':'high','3gmidhigh':'midhigh','3gmid':'mid','3gmidlow':'midlow','3glow':'low','3gverylow':'verylow'}
+
 
 # RepeatTimer class - Copyright (c) 2009 Geoffrey Foster
 # http://g-off.net/software/a-python-repeatable-threadingtimer-class
@@ -222,6 +233,10 @@ def transcoderNew(client,options="",fpath="",movieDir="",rate="norate",segstart=
         elif optname=='srtEncoding' and optval!="":
             sessions[client]['transcoder']['srtenc']=optval
 
+    # Perform rate conversion as it could be a mix of transport+rate
+    if ratelookupFFM.has_key(sessions[client]['transcoder']['rate']):
+        sessions[client]['transcoder']['rate']=ratelookupFFM[sessions[client]['transcoder']['rate']]
+
     # Before we finish we need to check the start segment against ones we already have
     # in stock, if we've already got it then dont make it again, push the startseg ahead
     rate=sessions[client]['transcoder']['rate']
@@ -267,6 +282,7 @@ def transcoderLaunch(client):
 
         # Temp file to replace stdout!
         segFile=transcoder['dest']+"seglist.out"
+                
         # Now start the stream compilation in the background
         execStr=[execDir+'/ffmpeg-stm','transcode',transcoder['source'],transcoder['dest']+transcoder['rate'],transcoder['rate'],str(transcoder['seglen']),str(transcoder['segstart']),transcoder['audio'],transcoder['subs'],transcoder['gain'],transcoder['art'],transcoder['srtenc'],transcoder['srtdir']]
         if sys.platform=='win32':
@@ -501,7 +517,7 @@ def doStream(client,self,url,options):
         # Create the file maps
         duration=int(sessions[client][fpath]['duration'])
         if duration==0: duration=(5*60*60)/DEFAULT_SEGLEN
-        for rate in ratelookup:
+        for rate in ratelookupBPS:
             sessions[client][fpath][rate]="0"*((duration/DEFAULT_SEGLEN)+1)
             
     # Handle any completed segments
@@ -523,9 +539,9 @@ def doStream(client,self,url,options):
                 # Generate UUID/index.m3u8
                 f=open(movieDir+"index.m3u8","w")
                 f.write("#EXTM3U\n")
-                if ratelookup.has_key(transport):
-                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH={0}\n".format(ratelookup[transport]))
-                    f.write("{0}.m3u8\n".format(transport))                
+                if ratelookupBPS.has_key(transport):
+                    f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH={0}\n".format(ratelookupBPS[transport]))
+                    f.write("{0}.m3u8\n".format(ratelookupFFM[transport]))                
                 elif transport=='local':
                     if device=='ipad' or device=='iphone4':
                         f.write("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2048000\n")
