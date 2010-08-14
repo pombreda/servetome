@@ -3,4 +3,5 @@ Change Log
 v100 - Initial version for StreamToMe V2.x
 v300 - Initial versino for StreamToMe V3.x
 v307 - Bug fixes & improved streaming logic
+v308 - Fixes for changes in Client v3.1.1 that caused stm.py to break
 
