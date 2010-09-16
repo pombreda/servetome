@@ -22,6 +22,7 @@
 # 14/07/10  KW   v307    Fixed error on index.m3u8 generation, now generated everytime requested
 # 16/07/10  CT   v308    Flat file modes added, aud/subs options fix
 # 14/08/10  KW   v309    Updates for client v3.1.1 changes that caused stm to break, "id" & "rate"
+# 16/09/10  KW   v310    Fix for 64bit machines, transcodeMetadata unpack "l" to "=l", line 420
 #
 #
 # TODO
@@ -416,7 +417,7 @@ def transcoderMetadata(client,fpath):
         if ffmpeg.returncode==0 or 1:
             stream=open(tempFile,'rb')
             # Read length of JSON segment + JSON + whole JPEG segment
-            json_length,=struct.unpack('l', stream.read(4))
+            json_length,=struct.unpack('=l', stream.read(4))
             response=stream.read()
             stream.close()
 
