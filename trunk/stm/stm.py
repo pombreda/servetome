@@ -29,7 +29,7 @@
 # ----
 # HTTP digest implementation
 
-STM_VERSION = "3.09"
+STM_VERSION = "3.10"
 
 import string,cgi,time
 import ConfigParser
@@ -64,6 +64,8 @@ SEG_LOOK_AHEAD=5
 DEFAULT_SEGLEN=4
 SESSION_TIMEOUT=1200
 SESSION_TIMEOUT_STEP=10
+#SESSION_TIMEOUT=10
+#SESSION_TIMEOUT_STEP=1
 COOKIENAME="STREAMSESSIONID"
 debugHandle=None
 commandHandle=None
