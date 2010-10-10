@@ -865,7 +865,8 @@ def listFiles(basePath, dir):
                 # If this file extension is supported, then add this relative file path to the list
                 if isReadableFile(item):
                     mtime=os.stat(basedir + "/" + item).st_mtime
-                    returnList.append(('', dir + "/" + item, 'absolutePath', mtime))
+                    #returnList.append(('', dir + "/" + item, 'absolutePath', mtime))
+                    returnList.append(('', dir + "/" + item, 'file', mtime))
             else:
                 subdirlist.append(os.path.join(dir, item))
                 
@@ -881,7 +882,8 @@ def listFiles(basePath, dir):
         fileName = os.path.basename(basePath + "/" + dir)
         debugLog("File Item =" + fileName)
         if isReadableFile(fileName):
-            returnList.append(('', dir, 'absolutePath', mtime))
+            #returnList.append(('', dir, 'absolutePath', mtime))
+            returnList.append(('', dir, 'file', mtime))
 
     return returnList
 
